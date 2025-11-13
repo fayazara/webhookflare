@@ -1,0 +1,626 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>WebhookFlare - Real-time webhook testing</title>
+		<script src="https://cdn.tailwindcss.com"></script>
+		<script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+		<script type="module">
+			import { codeToHtml } from 'https://esm.sh/shiki@3.15.0';
+			window.shikiCodeToHtml = codeToHtml;
+		</script>
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&display=swap" rel="stylesheet" />
+		<link
+			href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@100..900&family=Geist:wght@100..900&display=swap"
+			rel="stylesheet"
+		/>
+		<style>
+			* {
+				scrollbar-color: #d4d4d4 transparent;
+				scrollbar-width: thin;
+				-webkit-tap-highlight-color: transparent;
+				font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica Neue', Arial, sans-serif;
+				-webkit-font-smoothing: antialiased;
+				-moz-osx-font-smoothing: grayscale;
+				font-smooth: always;
+			}
+			.mono {
+				font-family: 'Geist Mono', 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+			}
+			.method-badge {
+				display: inline-flex;
+				align-items: center;
+				gap: 0.375rem;
+				border-radius: 0.375rem;
+				padding: 0.125rem 0.375rem;
+				font-weight: 500;
+				font-size: 12px;
+				line-height: 20px;
+				border: none;
+				outline: none;
+				transition: background-color 0.15s;
+				display: inline-flex;
+				justify-content: center;
+				align-items: center;
+				min-width: 60px;
+				max-width: 80px;
+			}
+
+		.obfuscated {
+			filter: blur(5px);
+			transition: filter 0.3s ease;
+		}
+
+		.obfuscated:hover {
+			filter: blur(0px);
+		}
+
+			.method-GET {
+				color: rgb(21, 128, 61);
+				background: rgb(34, 197, 94, 0.15);
+			}
+			.method-POST {
+				color: rgb(3, 105, 161);
+				background: rgb(59, 130, 246, 0.15);
+			}
+			.method-PUT {
+				color: rgb(161, 98, 7);
+				background: rgb(234, 179, 8, 0.15);
+			}
+			.method-DELETE {
+				color: rgb(190, 18, 60);
+				background: rgb(239, 68, 68, 0.15);
+			}
+			.method-PATCH {
+				color: rgb(67, 56, 202);
+				background: rgb(167, 139, 250, 0.15);
+			}
+			.request-row {
+				border-bottom: 1px solid #e5e7eb;
+				transition: background-color 0.1s, border-color 0.1s;
+				cursor: pointer;
+				position: relative;
+			}
+			.request-row:hover {
+				background-color: #f9fafb;
+			}
+			.request-row.selected {
+				background-color: #f0f9ff;
+			}
+			.request-row.selected::before {
+				content: '';
+				position: absolute;
+				left: 0;
+				top: 0;
+				bottom: 0;
+				width: 2px;
+				background-color: #3b82f6;
+			}
+			.status-dot {
+				width: 6px;
+				height: 6px;
+				border-radius: 50%;
+				display: inline-block;
+			}
+			.status-connected {
+				background: #10b981;
+				animation: pulse 2s ease-in-out infinite;
+			}
+			.status-disconnected {
+				background: #9ca3af;
+			}
+			@keyframes pulse {
+				0%,
+				100% {
+					opacity: 1;
+				}
+				50% {
+					opacity: 0.5;
+				}
+			}
+			.animate-flash {
+				animation: flash 0.5s ease-out;
+			}
+			@keyframes flash {
+				0% {
+					background-color: #dbeafe;
+				}
+				100% {
+					background-color: transparent;
+				}
+			}
+			/* Shiki code highlighting styles */
+			.shiki-wrapper {
+				overflow-x: auto;
+				border-radius: 0.375rem;
+				font-family: 'Geist Mono', 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace !important;
+			}
+			.shiki-wrapper pre {
+				margin: 0;
+				padding: 0;
+				background: transparent !important;
+				font-family: 'Geist Mono', 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace !important;
+			}
+			.shiki-wrapper code {
+				font-family: 'Geist Mono', 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace !important;
+				font-size: 0.875rem;
+				line-height: 1.5;
+			}
+			.shiki-wrapper * {
+				font-family: 'Geist Mono', 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace !important;
+			}
+		</style>
+	</head>
+	<body class="bg-white h-screen overflow-hidden" x-data="webhookApp()" x-init="init()">
+		<div class="h-full flex flex-col">
+			<!-- Header -->
+			<div class="border-b border-neutral-200 p-4 flex-shrink-0">
+				<div class="flex items-center justify-between">
+					<div>
+						<h1 class="font-semibold text-neutral-900">WebhookFlare</h1>
+						<p class="text-sm text-neutral-500 mt-0.5">Real-time webhook testing</p>
+					</div>
+					<div class="flex items-center gap-3">
+						<div class="flex items-center gap-2 text-sm text-neutral-600">
+							<span class="status-dot" :class="statusClass"></span>
+							<span x-text="statusText"></span>
+						</div>
+						<div class="text-sm text-neutral-500"><span x-text="requests.length"></span> requests</div>
+					</div>
+				</div>
+			</div>
+
+			<!-- Webhook URL Section -->
+			<div class="border-b border-neutral-200 p-4 bg-neutral-50 flex-shrink-0">
+				<div class="flex items-center gap-2">
+					<label class="text-sm font-medium text-neutral-700 w-20">Endpoint</label>
+					<input
+						type="text"
+						readonly
+						class="flex-1 px-2 py-1.5 border border-neutral-300 bg-white mono text-sm focus:outline-none focus:border-neutral-400 rounded"
+						:value="webhookUrl"
+					/>
+					<button
+						class="px-3 py-1.5 bg-neutral-800 text-white text-sm font-medium hover:bg-neutral-800 transition-colors rounded"
+						@click="copyToClipboard()"
+						x-text="copyButtonText"
+					></button>
+					<button
+						class="px-3 py-1.5 border border-neutral-300 text-sm font-medium hover:bg-neutral-50 transition-colors rounded"
+						@click="generateNewWebhook()"
+					>
+						New Endpoint
+					</button>
+				</div>
+			</div>
+
+			<!-- Main Content: Split Layout -->
+			<div class="flex flex-1 overflow-hidden">
+				<!-- Left: Requests List -->
+				<div class="w-2/3 border-r border-neutral-200 flex flex-col">
+					<div
+						class="px-6 py-2.5 bg-neutral-50 border-b border-neutral-200 flex items-center text-sm font-medium text-neutral-600 flex-shrink-0"
+					>
+						<div class="w-40">Date</div>
+						<div class="w-24">Method</div>
+						<div class="flex-1">Body Preview</div>
+						<div class="w-16 text-right">ID</div>
+					</div>
+					<div class="flex-1 overflow-y-auto">
+						<div>
+							<template x-if="requests.length === 0">
+								<div class="text-center text-neutral-400 py-12">
+									<svg class="w-12 h-12 mx-auto mb-2 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+										<path
+											stroke-linecap="round"
+											stroke-linejoin="round"
+											stroke-width="2"
+											d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
+										/>
+									</svg>
+									<p class="text-sm">Waiting for requests...</p>
+								</div>
+							</template>
+							<template x-for="(request, index) in requests" :key="request.id">
+								<div
+									class="request-row"
+									:class="{ 'animate-flash': index === 0 && request.isNew, 'selected': selectedRequestId === request.id }"
+									@click="selectRequest(request.id)"
+								>
+									<div class="px-6 py-2 flex items-center">
+										<div class="w-40 text-sm tracking-tighter text-neutral-500 mono" x-text="formatDate(request.timestamp)"></div>
+										<div class="w-24">
+											<span class="method-badge" :class="`method-${request.method}`" x-text="request.method"></span>
+										</div>
+										<div
+											class="flex-1 text-sm text-neutral-700 truncate mono tracking-tight"
+											:class="{ 'text-neutral-400': !request.body }"
+											x-text="getBodyPreview(request.body)"
+										></div>
+										<div class="w-16 text-right text-sm text-neutral-400 mono font-semibold" x-text="`#${request.id}`"></div>
+									</div>
+								</div>
+							</template>
+						</div>
+					</div>
+				</div>
+
+				<!-- Right: Request Details Sidebar -->
+				<div class="w-1/3 bg-neutral-50 overflow-y-auto">
+					<template x-if="!selectedRequest">
+						<div class="flex items-center justify-center h-full text-neutral-400">
+							<div class="text-center">
+								<svg class="w-12 h-12 mx-auto mb-2 opacity-40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+									<path
+										stroke-linecap="round"
+										stroke-linejoin="round"
+										stroke-width="2"
+										d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+									/>
+								</svg>
+								<p class="text-sm">Select a request to view details</p>
+							</div>
+						</div>
+					</template>
+
+					<template x-if="selectedRequest">
+						<div>
+							<!-- Header -->
+							<div class="px-4 py-2 bg-white border-b border-neutral-200 flex items-center justify-between sticky top-0">
+								<div class="flex items-center justify-between">
+									<div class="flex items-center gap-2">
+										<span class="text-sm text-neutral-400 mono" x-text="`#${selectedRequest.id}`"></span>
+										<span class="method-badge" :class="`method-${selectedRequest.method}`" x-text="selectedRequest.method"></span>
+									</div>
+								</div>
+								<div class="text-sm text-neutral-500 mono tracking-tighter" x-text="formatDate(selectedRequest.timestamp)"></div>
+							</div>
+
+							<!-- Query Parameters -->
+							<template x-if="selectedRequest.query && getQueryParams(selectedRequest).length > 0">
+								<div class="p-4">
+									<div class="bg-white border border-neutral-200 rounded-md overflow-hidden">
+										<div class="px-4 py-3">
+											<div class="text-sm font-semibold text-neutral-700">Query Parameters</div>
+										</div>
+										<div class="divide-y divide-neutral-200">
+											<template x-for="[key, value] in getQueryParams(selectedRequest)" :key="key">
+												<div class="text-sm mono px-4 py-3">
+													<div class="text-neutral-400 leading-relaxed text-sm mb-0.5" x-text="key"></div>
+													<div class="text-neutral-700 break-all font-mono" x-text="value"></div>
+												</div>
+											</template>
+										</div>
+									</div>
+								</div>
+							</template>
+
+							<!-- Cloudflare Metadata -->
+							<template x-if="selectedRequest.metadata && getMetadata(selectedRequest)">
+								<div class="px-4 py-2">
+									<div class="bg-white border border-neutral-200 rounded-md overflow-hidden">
+										<div class="px-4 py-3">
+											<div class="text-sm font-semibold text-neutral-700">Request Metadata</div>
+										</div>
+										<div class="divide-y divide-neutral-200">
+											<template x-for="[key, value] in Object.entries(getMetadata(selectedRequest))" :key="key">
+												<template x-if="value">
+													<div class="text-sm mono px-4 py-3">
+														<div class="text-neutral-500 leading-relaxed text-xs mb-0.5" x-text="formatMetadataKey(key)"></div>
+														<div class="text-neutral-700 font-medium text-sm break-all font-mono" :class="{ 'obfuscated': key === 'userIP' }" x-text="value"></div>
+													</div>
+												</template>
+											</template>
+										</div>
+									</div>
+								</div>
+							</template>
+
+							<!-- Headers -->
+							<div class="px-4 py-2">
+								<div class="bg-white border border-neutral-200 rounded-md overflow-hidden">
+									<div class="px-4 py-3">
+										<div class="text-sm font-semibold text-neutral-700">Headers</div>
+									</div>
+									<div class="divide-y divide-neutral-200">
+										<template x-for="[key, value] in getHeaders(selectedRequest)" :key="key">
+											<div class="text-sm px-4 py-3">
+												<div class="text-neutral-400 leading-relaxed text-sm mb-0.5" x-text="key"></div>
+												<div class="text-neutral-700 break-all font-mono" :class="{ 'obfuscated': key === 'cf-connecting-ip' || key === 'x-real-ip' }" x-text="value"></div>
+											</div>
+										</template>
+									</div>
+								</div>
+							</div>
+
+							<!-- Body -->
+							<div class="p-4">
+								<div class="bg-white border border-neutral-200 rounded-md overflow-hidden">
+									<div class="px-4 py-3 border-b border-neutral-200">
+										<div class="text-sm font-semibold text-neutral-700">Body</div>
+									</div>
+									<div class="px-4 py-3">
+										<template x-if="!selectedRequest.body">
+											<div class="text-sm mono text-neutral-400">No body</div>
+										</template>
+										<template x-if="selectedRequest.body && formattedBody">
+											<div class="shiki-wrapper font-mono mono" x-html="formattedBody"></div>
+										</template>
+										<template x-if="selectedRequest.body && !formattedBody">
+											<pre
+												class="text-sm mono text-neutral-800 overflow-x-auto whitespace-pre-wrap break-all"
+												x-text="selectedRequest.body"
+											></pre>
+										</template>
+									</div>
+								</div>
+							</div>
+						</div>
+					</template>
+				</div>
+			</div>
+		</div>
+
+		<script>
+			function webhookApp() {
+				return {
+					ws: null,
+					currentBinId: null,
+					requests: [],
+					selectedRequestId: null,
+					status: 'connecting',
+					statusText: 'Connecting',
+					copyButtonText: 'Copy',
+					formattedBody: '',
+
+					get webhookUrl() {
+						return this.currentBinId ? `${window.location.origin}/hook/${this.currentBinId}` : 'Generating...';
+					},
+
+					get curlCommand() {
+						return this.currentBinId
+							? `curl -X POST ${this.webhookUrl} -H "Content-Type: application/json" -d '{"test": "data"}'`
+							: 'Generating...';
+					},
+
+					get selectedRequest() {
+						return this.requests.find((r) => r.id === this.selectedRequestId) || null;
+					},
+
+					get statusClass() {
+						if (this.status === 'connected') {
+							return 'status-dot status-connected';
+						} else if (this.status === 'error') {
+							return 'status-dot bg-red-500';
+						}
+						return 'status-dot status-disconnected';
+					},
+
+					async init() {
+						const urlParams = new URLSearchParams(window.location.search);
+						const binId = urlParams.get('id');
+
+						if (binId) {
+							this.currentBinId = binId;
+							this.connectWebSocket();
+						} else {
+							await this.generateNewWebhook();
+						}
+					},
+
+					async generateNewWebhook() {
+						try {
+							const response = await fetch('/api/new');
+							const data = await response.json();
+							this.currentBinId = data.id;
+
+							window.history.pushState({}, '', `?id=${this.currentBinId}`);
+							this.connectWebSocket();
+						} catch (error) {
+							console.error('Error generating webhook:', error);
+						}
+					},
+
+					connectWebSocket() {
+						if (this.ws) {
+							this.ws.close();
+						}
+
+						const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+						const wsUrl = `${wsProtocol}//${window.location.host}/ws/${this.currentBinId}`;
+
+						this.ws = new WebSocket(wsUrl);
+
+						this.ws.onopen = () => {
+							this.status = 'connected';
+							this.statusText = 'Connected';
+						};
+
+						this.ws.onmessage = async (event) => {
+							const message = JSON.parse(event.data);
+
+							if (message.type === 'initial_data') {
+								this.requests = message.data;
+								// Auto-select the first request if available
+								if (this.requests.length > 0 && !this.selectedRequestId) {
+									await this.selectRequest(this.requests[0].id);
+								}
+							} else if (message.type === 'new_request') {
+								this.requests.unshift({ ...message.data, isNew: true });
+								// Auto-select new request
+								await this.selectRequest(message.data.id);
+								setTimeout(() => {
+									const req = this.requests.find((r) => r.id === message.data.id);
+									if (req) req.isNew = false;
+								}, 500);
+							}
+						};
+
+						this.ws.onerror = (error) => {
+							console.error('WebSocket error:', error);
+							this.status = 'error';
+							this.statusText = 'Connection error';
+						};
+
+						this.ws.onclose = () => {
+							this.status = 'disconnected';
+							this.statusText = 'Disconnected';
+							setTimeout(() => this.connectWebSocket(), 3000);
+						};
+					},
+
+					async selectRequest(id) {
+						this.selectedRequestId = id;
+						await this.formatSelectedBody();
+					},
+
+					async formatSelectedBody() {
+						if (!this.selectedRequest || !this.selectedRequest.body) {
+							this.formattedBody = '';
+							return;
+						}
+
+						try {
+							// Wait for shiki to be available
+							if (typeof window.shikiCodeToHtml === 'undefined') {
+								console.log('Waiting for shiki to load...');
+								await new Promise((resolve) => {
+									const checkShiki = setInterval(() => {
+										if (typeof window.shikiCodeToHtml !== 'undefined') {
+											clearInterval(checkShiki);
+											resolve();
+										}
+									}, 100);
+								});
+							}
+
+							const lang = this.detectLanguage(this.selectedRequest);
+							this.formattedBody = await window.shikiCodeToHtml(this.selectedRequest.body, {
+								lang: lang,
+								theme: 'min-light',
+							});
+						} catch (error) {
+							console.error('Error formatting code:', error);
+							this.formattedBody = '';
+						}
+					},
+
+					detectLanguage(request) {
+						// Try to detect language from Content-Type header
+						try {
+							const headers = JSON.parse(request.headers);
+							const contentType = headers['content-type'] || '';
+
+							if (contentType.includes('json')) {
+								return 'json';
+							} else if (contentType.includes('xml')) {
+								return 'xml';
+							} else if (contentType.includes('html')) {
+								return 'html';
+							} else if (contentType.includes('javascript')) {
+								return 'javascript';
+							} else if (contentType.includes('yaml')) {
+								return 'yaml';
+							}
+						} catch (e) {
+							// Ignore header parsing errors
+						}
+
+						// Try to detect from body content
+						const body = request.body.trim();
+						if (body.startsWith('{') || body.startsWith('[')) {
+							return 'json';
+						} else if (body.startsWith('<')) {
+							return 'xml';
+						}
+
+						return 'text';
+					},
+
+					async copyToClipboard() {
+						try {
+							await navigator.clipboard.writeText(this.webhookUrl);
+							this.copyButtonText = 'Copied!';
+							setTimeout(() => {
+								this.copyButtonText = 'Copy';
+							}, 1500);
+						} catch (err) {
+							console.error('Failed to copy:', err);
+						}
+					},
+
+					formatDate(timestamp) {
+						const date = new Date(timestamp);
+						return date.toLocaleString('en-US', {
+							month: 'short',
+							day: 'numeric',
+							hour: '2-digit',
+							minute: '2-digit',
+							second: '2-digit',
+							hour12: false,
+						});
+					},
+
+					getBodyPreview(body) {
+						let preview = body || 'No body';
+						if (preview.length > 100) {
+							preview = preview.substring(0, 100) + '...';
+						}
+						return preview.replace(/\n/g, ' ');
+					},
+
+					getHeaders(request) {
+						try {
+							return Object.entries(JSON.parse(request.headers));
+						} catch (e) {
+							return [];
+						}
+					},
+
+					getQueryParams(request) {
+						if (!request.query) return [];
+						try {
+							// Remove leading '?' if present
+							const queryString = request.query.startsWith('?') ? request.query.slice(1) : request.query;
+							if (!queryString) return [];
+
+							// Parse query string into key-value pairs
+							const params = new URLSearchParams(queryString);
+							return Array.from(params.entries());
+						} catch (e) {
+							return [];
+						}
+					},
+
+					getMetadata(request) {
+						if (!request.metadata) return null;
+						try {
+							const metadata = JSON.parse(request.metadata);
+							// Filter out null/undefined values
+							const filtered = {};
+							for (const [key, value] of Object.entries(metadata)) {
+								if (value !== null && value !== undefined) {
+									filtered[key] = value;
+								}
+							}
+							return Object.keys(filtered).length > 0 ? filtered : null;
+						} catch (e) {
+							return null;
+						}
+					},
+
+				formatMetadataKey(key) {
+					if (key === 'userIP') return 'User IP';
+					
+					// Convert camelCase to readable format
+					const formatted = key.replace(/([A-Z])/g, ' $1').trim();
+					return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+				},
+				};
+			}
+		</script>
+	</body>
+</html>
