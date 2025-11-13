@@ -402,17 +402,6 @@ pnpm run dev
 
 Contributions are welcome! This project serves as educational content for the Cloudflare developer community.
 
-### Ideas for Contributions
-
-- [ ] Add request filtering/search functionality
-- [ ] Implement webhook forwarding to other URLs
-- [ ] Add request comparison/diff view
-- [ ] Export requests as JSON/CSV
-- [ ] Dark mode support
-- [ ] Custom webhook slugs instead of random IDs
-- [ ] Request replay functionality
-- [ ] Webhook analytics dashboard
-
 ### Development Workflow
 
 1. Fork the repository
