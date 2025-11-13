@@ -422,9 +422,6 @@ Contributions are welcome! This project serves as educational content for the Cl
 5. Deploy to your Workers account: `pnpm run deploy`
 6. Submit a pull request
 
-## 📝 License
-
-MIT License - feel free to use this in your own projects!
 
 ## 🙋 Support & Questions
 
@@ -432,17 +429,6 @@ MIT License - feel free to use this in your own projects!
 - **Discord**: [Cloudflare Developers Discord](https://discord.gg/cloudflaredev)
 - **Docs**: [developers.cloudflare.com](https://developers.cloudflare.com)
 - **Issues**: [GitHub Issues](https://github.com/yourusername/webhookflare/issues)
-
-## 🌟 Acknowledgments
-
-Built by [@yourname](https://twitter.com/yourname) as part of the Cloudflare Developer Relations team's educational content.
-
-If you found this helpful, consider:
-
-- ⭐ Starring the repository
-- 🐦 Sharing on Twitter with #CloudflareDev
-- 📝 Writing about your experience using it
-- 🎥 Creating tutorial content
 
 ---
 
