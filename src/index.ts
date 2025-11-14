@@ -22,8 +22,8 @@ interface WebhookRequest {
 /** WebhookBin Durable Object - stores and broadcasts webhook requests */
 export class WebhookBin extends DurableObject {
 	private sessions: Set<WebSocket>;
-	// private static TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-	private static TTL_MS = 1 * 60 * 1000; // 1 min --- LOCAL TESTING ---
+	private static TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+	// private static TTL_MS = 1 * 60 * 1000; // 1 min --- LOCAL TESTING ---
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
