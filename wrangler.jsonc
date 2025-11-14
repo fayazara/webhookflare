@@ -27,6 +27,16 @@
 			}
 		]
 	},
+	"ratelimits": [
+		{
+			"name": "WEBHOOK_RATE_LIMITER",
+			"namespace_id": "1001",
+			"simple": {
+				"limit": 50,
+				"period": 60
+			}
+		}
+	],
 	"observability": {
 		"enabled": true
 	}

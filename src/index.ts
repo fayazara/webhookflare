@@ -9,6 +9,10 @@ import { DurableObject } from 'cloudflare:workers';
  * - Broadcasts new requests to all connected viewers
  */
 
+// ============================================================================
+// TYPES
+// ============================================================================
+
 interface WebhookRequest {
 	id: number;
 	timestamp: string;
@@ -19,11 +23,55 @@ interface WebhookRequest {
 	metadata: string;
 }
 
+interface CapturedMetadata {
+	city?: string | unknown;
+	postalCode?: string | unknown;
+	region?: string | unknown;
+	regionCode?: string | unknown;
+	country?: string | unknown;
+	continent?: string | unknown;
+	timezone?: string | unknown;
+	latitude?: number | unknown;
+	longitude?: number | unknown;
+	asOrganization?: string | unknown;
+	userIP?: string | null;
+}
+
+// ============================================================================
+// CONSTANTS
+// ============================================================================
+
+const CONFIG = {
+	TTL_MS: 6 * 60 * 60 * 1000, // 6 hours
+	// TTL_MS: 1 * 60 * 1000, // 1 min --- LOCAL TESTING ---
+	REQUEST_LIMIT: 100,
+};
+
+const CORS_HEADERS = {
+	'Access-Control-Allow-Origin': '*',
+	'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+	'Access-Control-Allow-Headers': 'Content-Type',
+};
+
+const ROUTES = {
+	API_NEW: '/api/new',
+	API_BIN: '/api/bin/',
+	WEBSOCKET: '/ws/',
+	WEBHOOK: '/hook/',
+	INIT: '/init',
+};
+
+const RESPONSES = {
+	INVALID_BIN_ID: 'Invalid bin ID',
+	INVALID_WEBHOOK_ID: 'Invalid webhook ID',
+	EXPECTED_WEBSOCKET: 'Expected WebSocket',
+	INITIALIZED: 'initialized',
+	WEBHOOK_CAPTURED: 'Webhook captured',
+};
+
 /** WebhookBin Durable Object - stores and broadcasts webhook requests */
 export class WebhookBin extends DurableObject {
 	private sessions: Set<WebSocket>;
-	private static TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
-	// private static TTL_MS = 1 * 60 * 1000; // 1 min --- LOCAL TESTING ---
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -43,27 +91,43 @@ export class WebhookBin extends DurableObject {
 		`);
 	}
 
-	// Ensure this Durable Object has a createdAt timestamp and a scheduled alarm
-	private async ensureScheduled() {
+	// ========================================================================
+	// Storage & Scheduling
+	// ========================================================================
+
+	/**
+	 * Ensure this Durable Object has a createdAt timestamp and a scheduled alarm
+	 */
+	private async ensureScheduled(): Promise<void> {
 		const createdAt = (await this.ctx.storage.get('createdAt')) as number | undefined;
 		if (!createdAt) {
 			const now = Date.now();
 			await this.ctx.storage.put('createdAt', now);
-			await this.ctx.storage.setAlarm(now + WebhookBin.TTL_MS);
+			await this.ctx.storage.setAlarm(now + CONFIG.TTL_MS);
 			return;
 		}
 
 		// If alarm missing for some reason, re-create it based on createdAt
 		const alarm = await this.ctx.storage.getAlarm();
 		if (alarm == null) {
-			await this.ctx.storage.setAlarm(createdAt + WebhookBin.TTL_MS);
+			await this.ctx.storage.setAlarm(createdAt + CONFIG.TTL_MS);
 		}
 	}
+
+	// ========================================================================
+	// Data Operations
+	// ========================================================================
 
 	/**
 	 * Store a webhook request and broadcast to all connected WebSocket clients
 	 */
-	async captureRequest(method: string, headers: Record<string, string>, body: string, query: string, metadata: string): Promise<number> {
+	async captureRequest(
+		method: string,
+		headers: Record<string, string>,
+		body: string,
+		query: string,
+		metadata: string
+	): Promise<number> {
 		const timestamp = new Date().toISOString();
 
 		// Store in SQLite
@@ -92,7 +156,7 @@ export class WebhookBin extends DurableObject {
 			metadata,
 		};
 
-		this.broadcast(JSON.stringify({ type: 'new_request', data: request }));
+		this.broadcastMessage({ type: 'new_request', data: request });
 
 		return result.id;
 	}
@@ -106,12 +170,17 @@ export class WebhookBin extends DurableObject {
 				`SELECT id, timestamp, method, headers, body, query, metadata 
 			 FROM requests 
 			 ORDER BY id DESC 
-			 LIMIT 100`
+			 LIMIT ?`,
+				CONFIG.REQUEST_LIMIT
 			)
 			.toArray() as unknown as WebhookRequest[];
 
 		return results;
 	}
+
+	// ========================================================================
+	// WebSocket Handling
+	// ========================================================================
 
 	/**
 	 * Handle WebSocket connections for real-time updates and lightweight init
@@ -120,56 +189,90 @@ export class WebhookBin extends DurableObject {
 		const url = new URL(request.url);
 
 		// Lightweight init route: ensure alarm is scheduled on creation
-		if (url.pathname === '/init') {
+		if (url.pathname === ROUTES.INIT) {
 			await this.ensureScheduled();
-			return new Response('initialized', { status: 200 });
+			return new Response(RESPONSES.INITIALIZED, { status: 200 });
 		}
 
 		// Handle WebSocket upgrade
 		if (request.headers.get('Upgrade') === 'websocket') {
-			// Ensure scheduling (if object was cold)
-			await this.ensureScheduled();
-
-			const pair = new WebSocketPair();
-			const [client, server] = Object.values(pair);
-
-			// Accept the WebSocket connection
-			server.accept();
-			this.sessions.add(server);
-
-			// Send existing requests on connection
-			const requests = await this.getRequests();
-			server.send(JSON.stringify({ type: 'initial_data', data: requests }));
-
-			// Handle close event
-			server.addEventListener('close', () => {
-				this.sessions.delete(server);
-			});
-
-			// Handle error event
-			server.addEventListener('error', () => {
-				this.sessions.delete(server);
-			});
-
-			return new Response(null, { status: 101, webSocket: client });
+			return this.handleWebSocketConnection(request);
 		}
 
-		return new Response('Expected WebSocket', { status: 400 });
+		return new Response(RESPONSES.EXPECTED_WEBSOCKET, { status: 400 });
 	}
 
 	/**
-	 * Alarm handler - called when the object's alarm fires
+	 * Handle a new WebSocket connection
 	 */
-	async alarm(alarmInfo?: any) {
+	private async handleWebSocketConnection(request: Request): Promise<Response> {
+		// Ensure scheduling (if object was cold)
+		await this.ensureScheduled();
+
+		const pair = new WebSocketPair();
+		const [client, server] = Object.values(pair);
+
+		// Accept the WebSocket connection
+		server.accept();
+		this.sessions.add(server);
+
+		// Send existing requests on connection
+		const requests = await this.getRequests();
+		server.send(JSON.stringify({ type: 'initial_data', data: requests }));
+
+		// Handle close event
+		server.addEventListener('close', () => {
+			this.sessions.delete(server);
+		});
+
+		// Handle error event
+		server.addEventListener('error', () => {
+			this.sessions.delete(server);
+		});
+
+		return new Response(null, { status: 101, webSocket: client });
+	}
+
+	/**
+	 * Broadcast message to all connected WebSocket clients
+	 */
+	private broadcastMessage(data: unknown): void {
+		this.broadcast(JSON.stringify(data));
+	}
+
+	/**
+	 * Send a message to all connected WebSocket clients
+	 */
+	private broadcast(message: string): void {
+		this.sessions.forEach((session) => {
+			try {
+				session.send(message);
+			} catch (err) {
+				// Client disconnected, remove from sessions
+				this.sessions.delete(session);
+			}
+		});
+	}
+
+	// ========================================================================
+	// Lifecycle
+	// ========================================================================
+
+	/**
+	 * Alarm handler - called when the object's alarm fires (TTL expiration)
+	 */
+	async alarm(): Promise<void> {
 		try {
-			// Broadcast deletion event and close sockets
-			this.broadcast(JSON.stringify({ type: 'deleted', reason: 'expired' }));
-			this.sessions.forEach((s) => {
+			// Broadcast deletion event to all connected clients
+			this.broadcastMessage({ type: 'deleted', reason: 'expired' });
+
+			// Close all WebSocket connections
+			this.sessions.forEach((session) => {
 				try {
-					s.send(JSON.stringify({ type: 'deleted', reason: 'expired' }));
-					s.close();
-				} catch (e) {
-					// ignore
+					session.send(JSON.stringify({ type: 'deleted', reason: 'expired' }));
+					session.close();
+				} catch (err) {
+					// Ignore errors during close
 				}
 			});
 			this.sessions.clear();
@@ -181,142 +284,274 @@ export class WebhookBin extends DurableObject {
 			throw err;
 		}
 	}
+}
 
-	/**
-	 * Broadcast message to all connected WebSocket clients
-	 */
-	private broadcast(message: string) {
-		this.sessions.forEach((session) => {
-			try {
-				session.send(message);
-			} catch (err) {
-				// Client disconnected, remove from sessions
-				this.sessions.delete(session);
-			}
-		});
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+/**
+ * Generate a random webhook ID (8 random alphanumeric characters)
+ */
+function generateWebhookId(): string {
+	return Array.from({ length: 8 }, () => Math.random().toString(36).charAt(2)).join('');
+}
+
+/**
+ * Extract ID from a path like /ws/{id} or /api/bin/{id}
+ */
+function extractIdFromPath(path: string, position: number = 2): string | null {
+	const parts = path.split('/');
+	return parts[position] || null;
+}
+
+/**
+ * Create a JSON response with CORS headers
+ */
+function createJsonResponse(data: unknown, status: number = 200): Response {
+	return new Response(JSON.stringify(data), {
+		status,
+		headers: {
+			'Content-Type': 'application/json',
+			...CORS_HEADERS,
+		},
+	});
+}
+
+/**
+ * Create an error response with CORS headers
+ */
+function createErrorResponse(message: string, status: number = 400): Response {
+	return createJsonResponse({ error: message }, status);
+}
+
+/**
+ * Create a CORS preflight response
+ */
+function createCorsPreflightResponse(): Response {
+	return new Response(null, {
+		status: 204,
+		headers: CORS_HEADERS,
+	});
+}
+
+/**
+ * Extract all headers from a request as a record
+ */
+function extractHeaders(request: Request): Record<string, string> {
+	const headers: Record<string, string> = {};
+	request.headers.forEach((value, key) => {
+		headers[key] = value;
+	});
+	return headers;
+}
+
+/**
+ * Build metadata object from Cloudflare request metadata
+ */
+function buildMetadata(request: Request): CapturedMetadata {
+	return {
+		city: request.cf?.city,
+		postalCode: request.cf?.postalCode,
+		region: request.cf?.region,
+		regionCode: request.cf?.regionCode,
+		country: request.cf?.country,
+		continent: request.cf?.continent,
+		timezone: request.cf?.timezone,
+		latitude: request.cf?.latitude,
+		longitude: request.cf?.longitude,
+		asOrganization: request.cf?.asOrganization,
+		userIP: request.headers.get('CF-Connecting-IP') || undefined,
+	};
+}
+
+// ============================================================================
+// ROUTE HANDLERS
+// ============================================================================
+
+/**
+ * Handle: POST /api/new
+ * Generate a new webhook ID and initialize its Durable Object
+ */
+async function handleCreateWebhook(env: Env): Promise<Response> {
+	if (!env.MY_DURABLE_OBJECT) {
+		console.error('MY_DURABLE_OBJECT binding is not configured');
+		return createErrorResponse('Service unavailable - Durable Object not configured', 503);
+	}
+
+	const id = generateWebhookId();
+
+	// Initialize the Durable Object now so it sets its createdAt + alarm immediately
+	const stub = env.MY_DURABLE_OBJECT.get(
+		env.MY_DURABLE_OBJECT.idFromName(id)
+	) as DurableObjectStub<WebhookBin>;
+
+	try {
+		// Call a lightweight init route on the DO
+		await stub.fetch(new Request('https://init/'));
+	} catch (err) {
+		// Non-fatal; DO may still be initialized on first real use
+		console.error('DO init failed', err);
+	}
+
+	return createJsonResponse({ id });
+}
+
+/**
+ * Handle: GET /api/bin/{id}
+ * Retrieve all captured requests for a specific webhook bin
+ */
+async function handleGetBinRequests(env: Env, id: string): Promise<Response> {
+	if (!id) {
+		return createErrorResponse(RESPONSES.INVALID_BIN_ID);
+	}
+
+	if (!env.MY_DURABLE_OBJECT) {
+		console.error('MY_DURABLE_OBJECT binding is not configured');
+		return createErrorResponse('Service unavailable - Durable Object not configured', 503);
+	}
+
+	const stub = env.MY_DURABLE_OBJECT.get(
+		env.MY_DURABLE_OBJECT.idFromName(id)
+	) as DurableObjectStub<WebhookBin>;
+
+	try {
+		const requests = await stub.getRequests();
+		return createJsonResponse(requests);
+	} catch (err) {
+		console.error(`Failed to get requests for bin ${id}:`, err);
+		return createErrorResponse('Failed to retrieve requests', 500);
 	}
 }
 
 /**
- * Generate a random webhook ID
+ * Handle: WS /ws/{id}
+ * Establish WebSocket connection for real-time updates
  */
-function generateId(): string {
-	return Array.from({ length: 8 }, () => Math.random().toString(36).charAt(2)).join('');
+async function handleWebSocketConnection(env: Env, id: string, request: Request): Promise<Response> {
+	if (!id) {
+		return createErrorResponse(RESPONSES.INVALID_BIN_ID);
+	}
+
+	if (!env.MY_DURABLE_OBJECT) {
+		console.error('MY_DURABLE_OBJECT binding is not configured');
+		return createErrorResponse('Service unavailable - Durable Object not configured', 503);
+	}
+
+	const stub = env.MY_DURABLE_OBJECT.get(
+		env.MY_DURABLE_OBJECT.idFromName(id)
+	) as DurableObjectStub<WebhookBin>;
+
+	try {
+		return await stub.fetch(request);
+	} catch (err) {
+		console.error(`Failed to establish WebSocket for bin ${id}:`, err);
+		return createErrorResponse('Failed to establish WebSocket connection', 500);
+	}
 }
+
+/**
+ * Handle: POST /hook/{id}
+ * Capture an incoming webhook request
+ */
+async function handleWebhookCapture(
+	env: Env,
+	id: string,
+	request: Request
+): Promise<Response> {
+	if (!id) {
+		return createErrorResponse(RESPONSES.INVALID_WEBHOOK_ID);
+	}
+
+	try {
+		// Validate that the Durable Object binding exists
+		if (!env.MY_DURABLE_OBJECT) {
+			console.error('MY_DURABLE_OBJECT binding is not configured');
+			return createErrorResponse('Service unavailable - Durable Object not configured', 503);
+		}
+
+		// Apply rate limiting to the webhook endpoint
+		if (env.WEBHOOK_RATE_LIMITER) {
+			const { success } = await env.WEBHOOK_RATE_LIMITER.limit({ key: id });
+			if (!success) {
+				return createErrorResponse(`Rate limit exceeded for webhook ${id}`, 429);
+			}
+		}
+
+		// Extract request details
+		const headers = extractHeaders(request);
+		const body = await request.text();
+		const query = new URL(request.url).search;
+		const metadata = JSON.stringify(buildMetadata(request));
+
+		// Store in Durable Object
+		const stub = env.MY_DURABLE_OBJECT.get(
+			env.MY_DURABLE_OBJECT.idFromName(id)
+		) as DurableObjectStub<WebhookBin>;
+
+		const requestId = await stub.captureRequest(request.method, headers, body, query, metadata);
+
+		return createJsonResponse({
+			success: true,
+			message: RESPONSES.WEBHOOK_CAPTURED,
+			requestId,
+		});
+	} catch (err) {
+		console.error(`Failed to capture webhook for ID ${id}:`, err);
+		return createErrorResponse('Failed to capture webhook', 500);
+	}
+}
+
+// ============================================================================
+// MAIN HANDLER
+// ============================================================================
 
 export default {
 	/**
 	 * Worker fetch handler - routes requests to appropriate handlers
 	 */
-	async fetch(request, env, ctx): Promise<Response> {
-		const url = new URL(request.url);
-		const path = url.pathname;
+	async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+		try {
+			const url = new URL(request.url);
+			const path = url.pathname;
 
-		// CORS headers for API requests
-		const corsHeaders = {
-			'Access-Control-Allow-Origin': '*',
-			'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-			'Access-Control-Allow-Headers': 'Content-Type',
-		};
-
-		// Handle CORS preflight
-		if (request.method === 'OPTIONS') {
-			return new Response(null, { headers: corsHeaders });
-		}
-
-		// API: Generate new webhook ID
-		if (path === '/api/new') {
-			const id = generateId();
-
-			// Initialize the Durable Object now so it sets its createdAt + alarm immediately
-			const stub = env.MY_DURABLE_OBJECT.get(env.MY_DURABLE_OBJECT.idFromName(id)) as DurableObjectStub<WebhookBin>;
-			try {
-				// call a lightweight init route on the DO
-				await stub.fetch(new Request('https://init/'));
-			} catch (err) {
-				// non-fatal; DO may still be initialized on first real use
-				console.error('DO init failed', err);
+			// Handle CORS preflight
+			if (request.method === 'OPTIONS') {
+				return createCorsPreflightResponse();
 			}
 
-			return new Response(JSON.stringify({ id }), {
-				headers: { 'Content-Type': 'application/json', ...corsHeaders },
-			});
-		}
-
-		// API: Get all requests for a webhook bin
-		if (path.startsWith('/api/bin/')) {
-			const id = path.split('/')[3];
-			if (!id) {
-				return new Response('Invalid bin ID', { status: 400 });
+			// Route to appropriate handler
+			if (path === ROUTES.API_NEW) {
+				return handleCreateWebhook(env);
 			}
 
-			const stub = env.MY_DURABLE_OBJECT.get(env.MY_DURABLE_OBJECT.idFromName(id)) as DurableObjectStub<WebhookBin>;
-			const requests = await stub.getRequests();
-
-			return new Response(JSON.stringify(requests), {
-				headers: { 'Content-Type': 'application/json', ...corsHeaders },
-			});
-		}
-
-		// WebSocket: Real-time updates
-		if (path.startsWith('/ws/')) {
-			const id = path.split('/')[2];
-			if (!id) {
-				return new Response('Invalid bin ID', { status: 400 });
+			if (path.startsWith(ROUTES.API_BIN)) {
+				const id = extractIdFromPath(path, 3);
+				return handleGetBinRequests(env, id || '');
 			}
 
-			const stub = env.MY_DURABLE_OBJECT.get(env.MY_DURABLE_OBJECT.idFromName(id)) as DurableObjectStub<WebhookBin>;
-			return stub.fetch(request);
-		}
-
-		// Webhook capture: Any request to /hook/{id}
-		if (path.startsWith('/hook/')) {
-			const id = path.split('/')[2];
-			if (!id) {
-				return new Response('Invalid webhook ID', { status: 400 });
+			if (path.startsWith(ROUTES.WEBSOCKET)) {
+				const id = extractIdFromPath(path, 2);
+				return handleWebSocketConnection(env, id || '', request);
 			}
 
-			// Capture request details
-			const headers: Record<string, string> = {};
-			request.headers.forEach((value, key) => {
-				headers[key] = value;
-			});
+			if (path.startsWith(ROUTES.WEBHOOK)) {
+				const id = extractIdFromPath(path, 2);
+				return handleWebhookCapture(env, id || '', request);
+			}
 
-			const body = await request.text();
-			const query = url.search;
+			// Serve static assets for root and other paths
+			const assets = (env as any).ASSETS;
+			if (assets) {
+				return assets.fetch(request);
+			}
 
-			// Capture Cloudflare metadata
-			const metadata = JSON.stringify({
-				city: request.cf?.city,
-				postalCode: request.cf?.postalCode,
-				region: request.cf?.region,
-				regionCode: request.cf?.regionCode,
-				country: request.cf?.country,
-				continent: request.cf?.continent,
-				timezone: request.cf?.timezone,
-				latitude: request.cf?.latitude,
-				longitude: request.cf?.longitude,
-				asOrganization: request.cf?.asOrganization,
-				userIP: request.headers.get('CF-Connecting-IP'),
-			});
-
-			// Store in Durable Object
-			const stub = env.MY_DURABLE_OBJECT.get(env.MY_DURABLE_OBJECT.idFromName(id)) as DurableObjectStub<WebhookBin>;
-			const requestId = await stub.captureRequest(request.method, headers, body, query, metadata);
-
-			return new Response(
-				JSON.stringify({
-					success: true,
-					message: 'Webhook captured',
-					requestId,
-				}),
-				{
-					headers: { 'Content-Type': 'application/json', ...corsHeaders },
-				}
-			);
+			// Fallback: return 404 if no ASSETS binding
+			return createErrorResponse('Not found', 404);
+		} catch (err) {
+			console.error('Unhandled error in fetch handler:', err);
+			return createErrorResponse('Internal server error', 500);
 		}
-
-		// Serve static assets for root and other paths
-		return (env as any).ASSETS.fetch(request);
 	},
 } satisfies ExportedHandler<Env>;
