@@ -1,7 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 
 /**
- * WebhookFlare - A webhook tester powered by Cloudflare Durable Objects
+ * WebhookBin - A webhook tester powered by Cloudflare Durable Objects
  *
  * Each webhook endpoint is a separate Durable Object instance that:
  * - Stores incoming webhook requests in SQLite
@@ -19,9 +19,11 @@ interface WebhookRequest {
 	metadata: string;
 }
 
-/** WebhookFlare Durable Object - stores and broadcasts webhook requests */
-export class WebhookFlare extends DurableObject {
+/** WebhookBin Durable Object - stores and broadcasts webhook requests */
+export class WebhookBin extends DurableObject {
 	private sessions: Set<WebSocket>;
+	private static TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+	// private static TTL_MS = 1 * 60 * 1000; // 1 min --- LOCAL TESTING ---
 
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
@@ -39,6 +41,23 @@ export class WebhookFlare extends DurableObject {
 				metadata TEXT
 			)
 		`);
+	}
+
+	// Ensure this Durable Object has a createdAt timestamp and a scheduled alarm
+	private async ensureScheduled() {
+		const createdAt = (await this.ctx.storage.get('createdAt')) as number | undefined;
+		if (!createdAt) {
+			const now = Date.now();
+			await this.ctx.storage.put('createdAt', now);
+			await this.ctx.storage.setAlarm(now + WebhookBin.TTL_MS);
+			return;
+		}
+
+		// If alarm missing for some reason, re-create it based on createdAt
+		const alarm = await this.ctx.storage.getAlarm();
+		if (alarm == null) {
+			await this.ctx.storage.setAlarm(createdAt + WebhookBin.TTL_MS);
+		}
 	}
 
 	/**
@@ -95,11 +114,22 @@ export class WebhookFlare extends DurableObject {
 	}
 
 	/**
-	 * Handle WebSocket connections for real-time updates
+	 * Handle WebSocket connections for real-time updates and lightweight init
 	 */
 	async fetch(request: Request): Promise<Response> {
+		const url = new URL(request.url);
+
+		// Lightweight init route: ensure alarm is scheduled on creation
+		if (url.pathname === '/init') {
+			await this.ensureScheduled();
+			return new Response('initialized', { status: 200 });
+		}
+
 		// Handle WebSocket upgrade
 		if (request.headers.get('Upgrade') === 'websocket') {
+			// Ensure scheduling (if object was cold)
+			await this.ensureScheduled();
+
 			const pair = new WebSocketPair();
 			const [client, server] = Object.values(pair);
 
@@ -125,6 +155,31 @@ export class WebhookFlare extends DurableObject {
 		}
 
 		return new Response('Expected WebSocket', { status: 400 });
+	}
+
+	/**
+	 * Alarm handler - called when the object's alarm fires
+	 */
+	async alarm(alarmInfo?: any) {
+		try {
+			// Broadcast deletion event and close sockets
+			this.broadcast(JSON.stringify({ type: 'deleted', reason: 'expired' }));
+			this.sessions.forEach((s) => {
+				try {
+					s.send(JSON.stringify({ type: 'deleted', reason: 'expired' }));
+					s.close();
+				} catch (e) {
+					// ignore
+				}
+			});
+			this.sessions.clear();
+
+			// Remove all storage (including sqlite state) to free space
+			await this.ctx.storage.deleteAll();
+		} catch (err) {
+			// Let the system retry if this throws; alarms have automatic retries
+			throw err;
+		}
 	}
 
 	/**
@@ -172,6 +227,17 @@ export default {
 		// API: Generate new webhook ID
 		if (path === '/api/new') {
 			const id = generateId();
+
+			// Initialize the Durable Object now so it sets its createdAt + alarm immediately
+			const stub = env.MY_DURABLE_OBJECT.get(env.MY_DURABLE_OBJECT.idFromName(id)) as DurableObjectStub<WebhookBin>;
+			try {
+				// call a lightweight init route on the DO
+				await stub.fetch(new Request('https://init/'));
+			} catch (err) {
+				// non-fatal; DO may still be initialized on first real use
+				console.error('DO init failed', err);
+			}
+
 			return new Response(JSON.stringify({ id }), {
 				headers: { 'Content-Type': 'application/json', ...corsHeaders },
 			});
@@ -184,7 +250,7 @@ export default {
 				return new Response('Invalid bin ID', { status: 400 });
 			}
 
-			const stub = env.MY_DURABLE_OBJECT.get(env.MY_DURABLE_OBJECT.idFromName(id));
+			const stub = env.MY_DURABLE_OBJECT.get(env.MY_DURABLE_OBJECT.idFromName(id)) as DurableObjectStub<WebhookBin>;
 			const requests = await stub.getRequests();
 
 			return new Response(JSON.stringify(requests), {
@@ -199,7 +265,7 @@ export default {
 				return new Response('Invalid bin ID', { status: 400 });
 			}
 
-			const stub = env.MY_DURABLE_OBJECT.get(env.MY_DURABLE_OBJECT.idFromName(id));
+			const stub = env.MY_DURABLE_OBJECT.get(env.MY_DURABLE_OBJECT.idFromName(id)) as DurableObjectStub<WebhookBin>;
 			return stub.fetch(request);
 		}
 
@@ -235,7 +301,7 @@ export default {
 			});
 
 			// Store in Durable Object
-			const stub = env.MY_DURABLE_OBJECT.get(env.MY_DURABLE_OBJECT.idFromName(id));
+			const stub = env.MY_DURABLE_OBJECT.get(env.MY_DURABLE_OBJECT.idFromName(id)) as DurableObjectStub<WebhookBin>;
 			const requestId = await stub.captureRequest(request.method, headers, body, query, metadata);
 
 			return new Response(
