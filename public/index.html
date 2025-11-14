@@ -283,9 +283,10 @@
 							<template x-if="selectedRequest.query && getQueryParams(selectedRequest).length > 0">
 								<div class="p-4">
 									<div class="bg-white border border-neutral-200 rounded-md overflow-hidden">
-										<div class="px-4 py-3">
-											<div class="text-sm font-semibold text-neutral-700">Query Parameters</div>
-										</div>
+										<div class="px-4 py-3 flex items-center justify-between">
+										<div class="text-sm font-semibold text-neutral-700">Query Parameters</div>
+										<button class="bg-neutral-50 rounded px-3 py-1.5 text-xs font-medium rounded hover:bg-neutral-100 transition-colors" @click="copyQueryParams()" x-text="copyStates.queryParams"></button>
+									</div>
 										<div class="divide-y divide-neutral-200">
 											<template x-for="[key, value] in getQueryParams(selectedRequest)" :key="key">
 												<div class="text-sm mono px-4 py-3">
@@ -302,8 +303,9 @@
 							<template x-if="selectedRequest.metadata && getMetadata(selectedRequest)">
 								<div class="px-4 py-2">
 									<div class="bg-white border border-neutral-200 rounded-md overflow-hidden">
-										<div class="px-4 py-3">
+										<div class="px-4 py-3 flex items-center justify-between">
 											<div class="text-sm font-semibold text-neutral-700">Request Metadata</div>
+											<button class="bg-neutral-50 rounded px-3 py-1.5 text-xs font-medium rounded hover:bg-neutral-100 transition-colors" @click="copyMetadata()">Copy</button>
 										</div>
 										<div class="divide-y divide-neutral-200">
 											<template x-for="[key, value] in Object.entries(getMetadata(selectedRequest))" :key="key">
@@ -322,8 +324,9 @@
 							<!-- Headers -->
 							<div class="px-4 py-2">
 								<div class="bg-white border border-neutral-200 rounded-md overflow-hidden">
-									<div class="px-4 py-3">
+									<div class="px-4 py-3 flex items-center justify-between">
 										<div class="text-sm font-semibold text-neutral-700">Headers</div>
+										<button class="bg-neutral-50 rounded px-3 py-1.5 text-xs font-medium rounded hover:bg-neutral-100 transition-colors" @click="copyHeaders()" x-text="copyStates.headers"></button>
 									</div>
 									<div class="divide-y divide-neutral-200">
 										<template x-for="[key, value] in getHeaders(selectedRequest)" :key="key">
@@ -339,8 +342,9 @@
 							<!-- Body -->
 							<div class="p-4">
 								<div class="bg-white border border-neutral-200 rounded-md overflow-hidden">
-									<div class="px-4 py-3 border-b border-neutral-200">
-										<div class="text-sm font-semibold text-neutral-700">Body</div>
+								<div class="px-4 py-3 flex items-center justify-between">
+									<div class="text-sm font-semibold text-neutral-700">Body</div>
+									<button class="bg-neutral-50 rounded px-3 py-1.5 text-xs font-medium rounded hover:bg-neutral-100 transition-colors" @click="copyBody()" x-text="copyStates.body"></button>
 									</div>
 									<div class="px-4 py-3">
 										<template x-if="!selectedRequest.body">
@@ -375,6 +379,12 @@
 					statusText: 'Connecting',
 					copyButtonText: 'Copy',
 					formattedBody: '',
+					copyStates: {
+						queryParams: 'Copy',
+						metadata: 'Copy',
+						headers: 'Copy',
+						body: 'Copy',
+					},
 
 					get webhookUrl() {
 						return this.currentBinId ? `${window.location.origin}/hook/${this.currentBinId}` : 'Generating...';
@@ -618,6 +628,105 @@
 					// Convert camelCase to readable format
 					const formatted = key.replace(/([A-Z])/g, ' $1').trim();
 					return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+				},
+
+				async copyToClipboardJson(data, label) {
+					try {
+						const jsonString = JSON.stringify(data, null, 2);
+						await navigator.clipboard.writeText(jsonString);
+						
+						// Show feedback
+						const originalLabel = label;
+						label = 'Copied!';
+						setTimeout(() => {
+							label = originalLabel;
+						}, 1500);
+					} catch (err) {
+						console.error('Failed to copy:', err);
+					}
+				},
+
+				async copyQueryParams() {
+					if (!this.selectedRequest) return;
+					
+					const params = this.getQueryParams(this.selectedRequest);
+					if (params.length === 0) return;
+					
+					// Convert array of [key, value] pairs to object
+					const paramsObj = {};
+					params.forEach(([key, value]) => {
+						paramsObj[key] = value;
+					});
+					
+					try {
+						const jsonString = JSON.stringify(paramsObj, null, 2);
+						await navigator.clipboard.writeText(jsonString);
+						this.copyStates.queryParams = 'Copied!';
+						setTimeout(() => {
+							this.copyStates.queryParams = 'Copy';
+						}, 1500);
+					} catch (err) {
+						console.error('Failed to copy:', err);
+					}
+				},
+
+				async copyMetadata() {
+					if (!this.selectedRequest) return;
+					
+					const metadata = this.getMetadata(this.selectedRequest);
+					if (!metadata) return;
+					
+					try {
+						const jsonString = JSON.stringify(metadata, null, 2);
+						await navigator.clipboard.writeText(jsonString);
+						this.copyStates.metadata = 'Copied!';
+						setTimeout(() => {
+							this.copyStates.metadata = 'Copy';
+						}, 1500);
+					} catch (err) {
+						console.error('Failed to copy:', err);
+					}
+				},
+
+				async copyHeaders() {
+					if (!this.selectedRequest) return;
+					
+					const headers = Object.fromEntries(this.getHeaders(this.selectedRequest));
+					
+					try {
+						const jsonString = JSON.stringify(headers, null, 2);
+						await navigator.clipboard.writeText(jsonString);
+						this.copyStates.headers = 'Copied!';
+						setTimeout(() => {
+							this.copyStates.headers = 'Copy';
+						}, 1500);
+					} catch (err) {
+						console.error('Failed to copy:', err);
+					}
+				},
+
+				async copyBody() {
+					if (!this.selectedRequest || !this.selectedRequest.body) return;
+					
+					try {
+						const jsonString = JSON.stringify(JSON.parse(this.selectedRequest.body), null, 2);
+						await navigator.clipboard.writeText(jsonString);
+						this.copyStates.body = 'Copied!';
+						setTimeout(() => {
+							this.copyStates.body = 'Copy';
+						}, 1500);
+					} catch (err) {
+						// If body is not valid JSON, copy as is
+						try {
+							await navigator.clipboard.writeText(this.selectedRequest.body);
+							this.copyStates.body = 'Copied!';
+							setTimeout(() => {
+								this.copyStates.body = 'Copy';
+							}, 1500);
+						} catch (copyErr) {
+							console.error('Failed to copy:', copyErr);
+						}
+					}
 				},
 				};
 			}
