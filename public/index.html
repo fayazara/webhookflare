@@ -811,10 +811,16 @@
 							return;
 						}
 
-						const minutes = Math.floor(diff / 60000);
+						const hours = Math.floor(diff / 3600000);
+						const minutes = Math.floor((diff % 3600000) / 60000);
 						const seconds = Math.floor((diff % 60000) / 1000);
 
-						this.timeLeft = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+						let timeString = '';
+						if (hours > 0) timeString += `${hours}h `;
+						if (minutes > 0 || hours > 0) timeString += `${minutes}m `;
+						timeString += `${seconds}s`;
+
+						this.timeLeft = timeString;
 					};
 
 					updateTimer();

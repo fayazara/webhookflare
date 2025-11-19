@@ -42,8 +42,8 @@ interface CapturedMetadata {
 // ============================================================================
 
 const CONFIG = {
-	TTL_MS: 6 * 60 * 60 * 1000, // 6 hours
-	// TTL_MS: 1 * 60 * 1000, // 1 min --- LOCAL TESTING ---
+	// TTL_MS: 6 * 60 * 60 * 1000, // 6 hours
+	TTL_MS: 1 * 60 * 1000, // 1 min --- LOCAL TESTING ---
 	REQUEST_LIMIT: 100,
 };
 
