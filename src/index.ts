@@ -218,7 +218,14 @@ export class WebhookBin extends DurableObject {
 
 		// Send existing requests on connection
 		const requests = await this.getRequests();
-		server.send(JSON.stringify({ type: 'initial_data', data: requests }));
+		const createdAt = (await this.ctx.storage.get('createdAt')) as number;
+		const expiresAt = createdAt ? createdAt + CONFIG.TTL_MS : Date.now() + CONFIG.TTL_MS;
+
+		server.send(JSON.stringify({
+			type: 'initial_data',
+			data: requests,
+			expiresAt: expiresAt
+		}));
 
 		// Handle close event
 		server.addEventListener('close', () => {
