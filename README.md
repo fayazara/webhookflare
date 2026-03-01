@@ -2,6 +2,8 @@
 
 A production-ready webhook testing and debugging tool built with Cloudflare Durable Objects, demonstrating the power of edge computing with persistent SQLite storage and real-time WebSocket updates.
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/fayazara/webhookflare)
+
 > **Perfect for:** Testing webhooks from third-party services, debugging API integrations, monitoring webhook payloads, and learning Cloudflare Durable Objects.
 
 ## ✨ Features
